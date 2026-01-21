@@ -133,7 +133,8 @@ function reconstructMassMailingTemplate() {
     'This tool allows you to send multiple personalised emails to different recipient'
   );
 
-  sheet.getRange('B4').setValue('View detailed user guide here');
+  sheet.getRange('B4').setValue("=HYPERLINK(\"Link to your tuto\";\"View detailed user guide here\")");
+
 
   sheet.getRange('A6').setValue('Template ID:').setFontWeight('bold');
 
@@ -172,8 +173,8 @@ function reconstructMassMailingTemplate() {
   // Example values (row 10) to demonstrate expected input format.
   sheet.getRange('C10').setValue('example.to@domain.com');
   sheet.getRange('D10').setValue('example.cc@domain.com');
-  sheet.getRange('H10').setValue('Ipsum');
-  sheet.getRange('I10').setValue('Car');
+  sheet.getRange('H10').setValue('Jayzonne');
+  sheet.getRange('I10').setValue('https://github.com/Jayzonne');
 
   // ---------------------------------------------------------------------------
   // Header row (row 11)
