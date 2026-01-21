@@ -139,7 +139,7 @@ function reconstructMassMailingTemplate() {
   sheet.getRange('A6').setValue('Template ID:').setFontWeight('bold');
 
   // Template ID is expected to be pasted by the user.
-  sheet.getRange('B6').setValue('');
+  sheet.getRange('B6').setValue('1f8xBSdiOR3rbBZIh7eNdZFoaaigu3qI5D3rdMbqiryU');
 
   // Link to the Google Docs template, built from the template ID cell.
   // Note: Uses French locale separator ";".
