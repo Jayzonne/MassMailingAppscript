@@ -3,109 +3,95 @@
  *
  * Central configuration for the Google Sheets Mass Mailing Engine.
  *
- * This file defines:
- * - Structural rules of the spreadsheet (header row, fixed cells)
- * - Email-sending behavior (throttling, marking strategy)
- * - Reserved column names used for email configuration
- * - Test mode configuration
+ * Purpose:
+ * - Define all sheet-specific and behavior-specific settings in one place
+ * - Allow adapting the system to a new sheet layout without touching logic code
+ * - Act as a contract between the spreadsheet structure and the engine
  *
- * ⚠️ This file should be considered read-only for end users.
- * Any change here impacts the global behavior of the system.
+ * Any change here should be intentional and reviewed, as it can affect:
+ * - Header resolution
+ * - Sending eligibility
+ * - Throttling behavior
+ * - Row state management
  */
 const APP_CONFIG = {
-
   /**
-   * Row index (1-based) where the table headers are located.
-   * All data rows must be strictly below this row.
+   * Row number containing the column headers.
+   *
+   * Must match the value used by:
+   * - SheetTable.fromSheet(...)
+   * - Template reconstruction logic
    */
   headerRow: 11,
 
   /**
    * Cell containing the Google Docs template ID.
-   * Example: B6
+   * Used by the orchestrator to locate the source document for mail-merge.
    */
   templateIdCell: 'B6',
 
   /**
-   * Cell containing the default email subject.
-   * Can be overridden per row if a "subject" column exists.
+   * Cell containing the global (default) subject.
+   *
+   * Rule:
+   * - This value is required to send emails
+   * - A row-level "Subject" overrides this value when present
    */
   subjectCell: 'B7',
 
   /**
-   * Canonical header names used internally by the system.
-   * These values must match the column headers in the sheet
-   * (case-insensitive, whitespace-insensitive).
+   * Canonical names for control/status headers.
+   *
+   * These are normalized internally (case-insensitive),
+   * but must remain stable across the system.
    */
   headers: {
-    /** Checkbox column indicating a row should be sent */
     toSend: 'to send',
-
-    /** Checkbox column indicating the email has been successfully sent */
     sent: 'sent',
-
-    /** Optional column storing the timestamp of the send operation */
     sentAt: 'sentAt',
   },
 
   /**
-   * Throttling configuration to avoid Gmail anti-spam
-   * and Apps Script rate limits.
+   * Throttling configuration (in seconds).
    *
-   * A random delay between min and max is applied
-   * after each email send attempt.
+   * Randomized delays between sends are used to:
+   * - Reduce burst-like behavior
+   * - Lower the risk of hitting Gmail or Apps Script quotas
    */
   throttling: {
-    /** Minimum delay (in seconds) between two emails */
     secondsMin: 10,
-
-    /** Maximum delay (in seconds) between two emails */
     secondsMax: 15,
   },
 
   /**
-   * Behavior related to how rows are updated after sending.
+   * Row-marking behavior after a successful send.
+   *
+   * These flags allow adjusting UX without changing orchestration logic.
    */
   marking: {
-    /**
-     * If true, the "Sent" checkbox is marked immediately
-     * after each successful email (not at end of batch).
-     */
-    markSentImmediately: true,
-
-    /**
-     * If true, the "To send" checkbox is cleared
-     * once the email has been sent.
-     */
-    clearToSendAfterSent: true,
-
-    /**
-     * If true and a "sentAt" column exists,
-     * the current timestamp is written after sending.
-     */
-    writeSentTimestamp: true,
+    markSentImmediately: true,      // Update status as soon as an email is sent
+    clearToSendAfterSent: true,     // Prevent accidental re-sends
+    writeSentTimestamp: true,       // Enable sentAt date/time tracking
   },
 
   /**
-   * Configuration for the built-in test mode.
-   * This row is sent independently of the batch logic.
+   * Configuration for the "test email" feature.
+   *
+   * The test row is intentionally outside the main data block
+   * to avoid accidental inclusion in batch sends.
    */
   test: {
-    /**
-     * Absolute row number used for "Test email" action.
-     * This row may be above the header row.
-     */
     rowNumber: 10,
   },
 
   /**
-   * List of reserved column headers used for email configuration.
+   * Reserved headers are excluded from template variable substitution.
    *
-   * These columns are considered "blue columns" and:
-   * - are used to build Gmail options (To, CC, BCC, etc.)
-   * - are excluded from Google Docs template variables
+   * Rationale:
+   * - Email routing and control fields must never leak into template variables
+   * - Variants are included to tolerate common header spelling differences
    *
-   * Any duplicate or misuse of these headers will block sending.
+   * If you add a new system-level column, it should be listed here.
    */
   reservedEmailHeaders: [
     'email',
@@ -121,16 +107,27 @@ const APP_CONFIG = {
     'from name',
     'fromemail',
     'from email',
-    'subject'
+    'subject',
+    'sentat',
+    'sent at',
+    'sent_at',
   ],
 
   /**
-   * Email address used when "No Reply" is enabled on a row.
+   * Sender address used when the "noReply" flag is enabled on a row.
    *
-   * ⚠️ This address MUST be a valid "Send mail as" alias
-   * configured in the Gmail / Google Workspace account.
-   *
-   * Spoofing is intentionally not supported.
+   * Important:
+   * - This address must be configured as an allowed alias
+   *   in the Gmail account ("Send mail as").
    */
   noReplyFromEmail: 'noreply@domain.com',
+
+  /**
+   * Canonical date/time format for the SentAt column.
+   *
+   * Centralizing this here ensures:
+   * - Consistent rendering between reconstruction and runtime updates
+   * - Easy localization or format changes in one place
+   */
+  sentAtNumberFormat: 'yyyy/MM/dd - HH:mm:ss',
 };
