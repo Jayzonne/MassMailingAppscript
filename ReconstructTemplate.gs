@@ -1,239 +1,257 @@
 /**
- * ReconstructTemplate.gs
+ * Rebuilds the mass-mailing sheet layout on the active sheet.
  *
- * Rebuilds the "mass mailing template" layout on the ACTIVE SHEET.
+ * Why this exists:
+ * - People copy/paste or tweak sheets and slowly break the expected structure.
+ * - This function provides a one-click, deterministic way to return to a known-good layout.
  *
- * Responsibilities:
- * - Reset the active sheet (content + formatting)
- * - Create a standardized header + data layout used by the mass-mailing engine
- * - Apply required merged cells, formatting, and checkbox validations
- * - Populate a minimal "test area" with example values
+ * Contract with the rest of the project:
+ * - The header row and header labels produced here must match what the sending engine expects
+ *   (SheetTable + EmailComposer + Orchestrator).
+ * - Changing column order or header names here requires updating the engine configuration accordingly.
  *
- * This module is intentionally independent from the sending workflow.
- * It is meant for onboarding, quick resets, and consistent sheet creation.
- */
-
-/**
- * Adds the reconstruction action to an existing custom menu.
- *
- * Usage (inside your single onOpen()):
- *   const menu = ui.createMenu('Send email');
- *   ...
- *   addReconstructTemplateMenu_(menu);
- *   menu.addToUi();
- *
- * @param {GoogleAppsScript.Base.Menu} menu
- *   The menu to which the reconstruction item will be appended.
- */
-function addReconstructTemplateMenu_(menu) {
-  menu.addSeparator();
-  menu.addItem('Reconstruct mass mailing template', 'reconstructMassMailingTemplate');
-}
-
-/**
- * Reconstructs the mass mailing template on the currently active sheet.
- *
- * Warning:
- * - This operation clears all content and formatting of the active sheet.
- * - It is destructive by design.
- *
- * Layout produced:
- * - Top configuration area (instructions + template id + subject)
- * - "Test Email Data" row (row 10) with a dedicated checkbox in G10
- * - Header row (row 11) with color-coded sections:
- *   - A..G: email configuration (blue)
- *   - H..L: template variables (green)
- * - Data section starting at row 12 with checkbox validations
+ * Notes:
+ * - This function intentionally does a "hard reset" (break merges, clear values, clear validations)
+ *   to avoid leftover artifacts when re-running reconstruction on a previously edited sheet.
  */
 function reconstructMassMailingTemplate() {
   const sheet = SpreadsheetApp.getActiveSheet();
   const ui = SpreadsheetApp.getUi();
 
   const resp = ui.alert(
-    `Reconstruct mass mailing template on sheet "${sheet.getName()}"?\n\nThis will CLEAR the sheet content & formatting.`,
+    `Reconstruct mass mailing template on sheet "${sheet.getName()}"?\n\nThis will CLEAR the entire sheet.`,
     ui.ButtonSet.OK_CANCEL
   );
   if (resp !== ui.Button.OK) return;
 
   /**
-   * Layout constants.
-   * Keep these aligned with the sending engine configuration (APP_CONFIG).
+   * Layout anchors.
+   * - HEADER_ROW must stay aligned with APP_CONFIG.headerRow.
+   * - FIRST_DATA_ROW must be HEADER_ROW + 1.
    */
   const HEADER_ROW = 11;
   const FIRST_DATA_ROW = 12;
   const MAX_DATA_ROWS = 300;
-  const LAST_COL = 12; // A..L
 
   /**
-   * Column map (1-based indices).
-   * This mapping is used only for reconstruction and formatting.
+   * This template currently uses 14 columns (A..N).
+   * If you add more fields, update:
+   * - LAST_COL
+   * - COL mapping
+   * - headers array
+   * - header coloring ranges (blue/green segments)
+   */
+  const LAST_COL = 14;
+
+  /**
+   * Column mapping (1-based).
+   * This is used to keep the code resilient if the column order evolves.
    */
   const COL = {
-    TO_SEND: 1,   // A
-    SENT: 2,      // B
-    EMAIL: 3,     // C
-    CC: 4,        // D
-    BCC: 5,       // E
-    REPLY_TO: 6,  // F
-    NO_REPLY: 7,  // G
-    NAME: 8,      // H
-    TOPIC1: 9,    // I
-    TOPIC2: 10,   // J
-    TOPIC3: 11,   // K
-    COUNTRY: 12,  // L
+    TO_SEND: 1,
+    SENT: 2,
+    SENT_AT: 3,
+    SUBJECT: 4,
+    EMAIL: 5,
+    CC: 6,
+    BCC: 7,
+    REPLY_TO: 8,
+    NO_REPLY: 9,
+    NAME: 10,
+    TOPIC1: 11,
+    TOPIC2: 12,
+    TOPIC3: 13,
+    COUNTRY: 14,
   };
 
-  // ---------------------------------------------------------------------------
-  // Reset sheet
-  // ---------------------------------------------------------------------------
+  /**
+   * Default values used to make a freshly reconstructed sheet immediately usable.
+   * - templateIdDefault is pre-filled to reduce onboarding friction.
+   * - globalSubjectDefault is required by the engine and blocks sending if empty.
+   * - userGuideUrl is a clickable entry point for end users.
+   */
+  const templateIdDefault = '1f8xBSdiOR3rbBZIh7eNdZFoaaigu3qI5D3rdMbqiryU';
+  const globalSubjectDefault = 'Pour me soutenir => une étoile sur mon GitHub.';
+  const userGuideUrl = 'https://github.com/jayzonne';
 
-  sheet.clear({ contentsOnly: false });
+  /**
+   * Hard reset: ensures reconstruction is idempotent.
+   * We break merges before clearing to avoid residual merge artifacts.
+   */
+  const fullRange = sheet.getRange(1, 1, sheet.getMaxRows(), sheet.getMaxColumns());
+  fullRange.breakApart();
+  sheet.clear();
+  fullRange.clearDataValidations();
   sheet.setFrozenRows(0);
   sheet.setFrozenColumns(0);
+  sheet.setRowHeights(1, sheet.getMaxRows(), 21);
 
-  // Ensure the sheet has at least A..L columns.
+  // Ensure enough columns exist for the template (A..N).
   if (sheet.getMaxColumns() < LAST_COL) {
     sheet.insertColumnsAfter(sheet.getMaxColumns(), LAST_COL - sheet.getMaxColumns());
   }
 
-  // ---------------------------------------------------------------------------
-  // Layout: column widths (approx. matching the reference sheet)
-  // ---------------------------------------------------------------------------
+  /**
+   * Column sizing is UX-driven.
+   * - Column B ("Sent") is the baseline reference.
+   * - A and C are slightly wider for checkbox clarity + full timestamp readability.
+   */
+  sheet.setColumnWidth(COL.TO_SEND, 130);
+  sheet.setColumnWidth(COL.SENT, 90);
+  sheet.setColumnWidth(COL.SENT_AT, 235);
+  sheet.setColumnWidth(COL.SUBJECT, 300);
+  sheet.setColumnWidth(COL.EMAIL, 280);
+  sheet.setColumnWidth(COL.CC, 200);
+  sheet.setColumnWidth(COL.BCC, 200);
+  sheet.setColumnWidth(COL.REPLY_TO, 160);
+  sheet.setColumnWidth(COL.NO_REPLY, 110);
+  sheet.setColumnWidth(COL.NAME, 140);
+  sheet.setColumnWidth(COL.TOPIC1, 220);
+  sheet.setColumnWidth(COL.TOPIC2, 140);
+  sheet.setColumnWidth(COL.TOPIC3, 140);
+  sheet.setColumnWidth(COL.COUNTRY, 140);
 
-  sheet.setColumnWidth(1, 90);    // A To send
-  sheet.setColumnWidth(2, 90);    // B Sent
-  sheet.setColumnWidth(3, 260);   // C Email
-  sheet.setColumnWidth(4, 200);   // D cc
-  sheet.setColumnWidth(5, 200);   // E bcc
-  sheet.setColumnWidth(6, 140);   // F replyTo
-  sheet.setColumnWidth(7, 110);   // G noReply
-  sheet.setColumnWidth(8, 140);   // H Name
-  sheet.setColumnWidth(9, 170);   // I Topic1
-  sheet.setColumnWidth(10, 140);  // J Topic2
-  sheet.setColumnWidth(11, 140);  // K Topic3
-  sheet.setColumnWidth(12, 140);  // L Country
-
-  // ---------------------------------------------------------------------------
-  // Layout: merged ranges
-  // ---------------------------------------------------------------------------
-  // Merges must be applied before writing values/formulas into those ranges.
-  sheet.getRange('B2:D2').merge();     // instructions text line
-  sheet.getRange('B4:C4').merge();     // user guide link placeholder
-  sheet.getRange('B6:C6').merge();     // template ID input
-  sheet.getRange('F6:G6').merge();     // helper text
-  sheet.getRange('B7:D7').merge();     // subject input
-  sheet.getRange('A10:B10').merge();   // "Test Email Data" label
-
-  // ---------------------------------------------------------------------------
-  // Top area: instructions + configuration cells
-  // ---------------------------------------------------------------------------
+  /**
+   * Merges are part of the "template UX" (top configuration zone).
+   * If you move config cells (e.g., Template ID), update APP_CONFIG accordingly.
+   */
+  sheet.getRange('B2:D2').merge();
+  sheet.getRange('B4:C4').merge();
+  sheet.getRange('B6:C6').merge();
+  sheet.getRange('E6:F6').merge();
+  sheet.getRange('B7:D7').merge();
+  sheet.getRange('A10:B10').merge();
 
   sheet.getRange('A2').setValue('Instructions:').setFontWeight('bold');
-  sheet.getRange('B2').setValue(
-    'This tool allows you to send multiple personalised emails to different recipient'
-  );
+  sheet.getRange('B2').setValue('This tool allows you to send multiple personalised emails to different recipient');
 
-  sheet.getRange('B4').setValue("=HYPERLINK(\"Link to your tuto\";\"View detailed user guide here\")");
-
+  // Use HYPERLINK formula for portability across copies of the sheet.
+  sheet.getRange('B4').setFormula(`=HYPERLINK("${userGuideUrl}"; "View detailed user guide here")`);
 
   sheet.getRange('A6').setValue('Template ID:').setFontWeight('bold');
+  sheet.getRange('B6').setValue(templateIdDefault);
 
-  // Template ID is expected to be pasted by the user.
-  sheet.getRange('B6').setValue('1f8xBSdiOR3rbBZIh7eNdZFoaaigu3qI5D3rdMbqiryU');
-
-  // Link to the Google Docs template, built from the template ID cell.
-  // Note: Uses French locale separator ";".
+  /**
+   * The "Template" link is derived from the template ID cell.
+   * Locale note: using ";" as argument separator (French locale sheets).
+   * If your spreadsheet locale uses ",", update the formula separator.
+   */
   sheet.getRange('E6').setFormula(
     '=HYPERLINK("https://docs.google.com/document/d/" & B6 & "/edit"; "Template")'
   );
+  sheet.getRange('G6').setValue('The ID of a Google Doc template');
 
-  // Helper text shown to the user (merged F6:G6).
-  sheet.getRange('F6').setValue('The ID of a Google Doc template');
+  // Global subject is required: the sending workflow blocks if this is empty.
+  sheet.getRange('A7').setValue('Subject (default):').setFontWeight('bold');
+  sheet.getRange('B7').setValue(globalSubjectDefault);
 
-  sheet.getRange('A7').setValue('Subject:').setFontWeight('bold');
-  sheet.getRange('B7').setValue('test email');
+  sheet.getRange('A10').setValue('Test Email Data').setFontWeight('bold');
 
-  // ---------------------------------------------------------------------------
-  // Test area (row 10)
-  // ---------------------------------------------------------------------------
-
-  sheet.getRange('A10')
-    .setValue('Test Email Data')
-    .setFontWeight('bold')
-    .setHorizontalAlignment('left')
-    .setVerticalAlignment('middle');
-
-  // Dedicated checkbox in G10 (test-only control).
+  /**
+   * Checkboxes are used as an explicit, low-friction workflow:
+   * - To send: user intent selection
+   * - Sent: system status
+   * - noReply: per-row sending behavior
+   */
   const checkboxRule = SpreadsheetApp.newDataValidation().requireCheckbox().build();
-  sheet.getRange('G10')
+  sheet
+    .getRange(10, COL.NO_REPLY)
     .setDataValidation(checkboxRule)
     .setValue(false)
     .setHorizontalAlignment('center');
 
-  // Example values (row 10) to demonstrate expected input format.
-  sheet.getRange('C10').setValue('example.to@domain.com');
-  sheet.getRange('D10').setValue('example.cc@domain.com');
-  sheet.getRange('H10').setValue('Jayzonne');
-  sheet.getRange('I10').setValue('https://github.com/Jayzonne');
+  /**
+   * Test row sample values are intentionally recognizable,
+   * making it easy to validate template variables end-to-end.
+   */
+  sheet.getRange(10, COL.SUBJECT).setValue('Test subject');
+  sheet.getRange(10, COL.EMAIL).setValue('example.to@domain.com');
+  sheet.getRange(10, COL.CC).setValue('example.cc@domain.com');
+  sheet.getRange(10, COL.NAME).setValue('Jayzonne');
+  sheet.getRange(10, COL.TOPIC1).setValue('github.com/jayzonne');
 
-  // ---------------------------------------------------------------------------
-  // Header row (row 11)
-  // ---------------------------------------------------------------------------
-
+  /**
+   * Header names are the API between the sheet and the engine.
+   * Changes here must be reflected in:
+   * - APP_CONFIG.headers
+   * - APP_CONFIG.reservedEmailHeaders
+   * - any logic expecting these labels (EmailComposer, Orchestrator)
+   */
   const headers = [
-    'To send', 'Sent', 'Email', 'cc', 'bcc', 'replyTo', 'noReply',
-    'Name', 'Topic1', 'Topic2', 'Topic3', 'Country'
+    'To send',
+    'Sent',
+    'SentAt',
+    'Subject',
+    'Email',
+    'cc',
+    'bcc',
+    'replyTo',
+    'noReply',
+    'Name',
+    'Topic1',
+    'Topic2',
+    'Topic3',
+    'Country',
   ];
 
-  sheet.getRange(HEADER_ROW, 1, 1, LAST_COL)
+  sheet
+    .getRange(HEADER_ROW, 1, 1, LAST_COL)
     .setValues([headers])
     .setFontWeight('bold')
     .setVerticalAlignment('middle')
     .setHorizontalAlignment('center');
 
-  // Color-coded header sections (approx. matching the reference sheet).
+  /**
+   * Visual separation:
+   * - Blue: email configuration / operational columns
+   * - Green: template variables (mail merge payload)
+   *
+   * Keep these ranges aligned with the column split.
+   */
   const blue = '#4a86e8';
   const green = '#93c47d';
 
-  sheet.getRange(HEADER_ROW, 1, 1, 7).setBackground(blue).setFontColor('#000000');   // A..G
-  sheet.getRange(HEADER_ROW, 8, 1, 5).setBackground(green).setFontColor('#000000');  // H..L
-
-  sheet.getRange(HEADER_ROW, 1, 1, LAST_COL)
-    .setBorder(true, true, true, true, true, true);
-
+  sheet.getRange(HEADER_ROW, 1, 1, 9).setBackground(blue).setFontColor('#000000');
+  sheet.getRange(HEADER_ROW, 10, 1, 5).setBackground(green).setFontColor('#000000');
+  sheet.getRange(HEADER_ROW, 1, 1, LAST_COL).setBorder(true, true, true, true, true, true);
   sheet.setRowHeight(HEADER_ROW, 28);
 
-  // ---------------------------------------------------------------------------
-  // Data area (rows 12+): validations + formatting
-  // ---------------------------------------------------------------------------
-
-  // Checkboxes for operational columns: To send / Sent / noReply
   sheet.getRange(FIRST_DATA_ROW, COL.TO_SEND, MAX_DATA_ROWS, 1).setDataValidation(checkboxRule);
   sheet.getRange(FIRST_DATA_ROW, COL.SENT, MAX_DATA_ROWS, 1).setDataValidation(checkboxRule);
   sheet.getRange(FIRST_DATA_ROW, COL.NO_REPLY, MAX_DATA_ROWS, 1).setDataValidation(checkboxRule);
 
-  // Center checkbox columns
-  sheet.getRange(FIRST_DATA_ROW, COL.TO_SEND, MAX_DATA_ROWS, 2).setHorizontalAlignment('center'); // A,B
-  sheet.getRange(FIRST_DATA_ROW, COL.NO_REPLY, MAX_DATA_ROWS, 1).setHorizontalAlignment('center'); // G
+  sheet.getRange(FIRST_DATA_ROW, COL.TO_SEND, MAX_DATA_ROWS, 2).setHorizontalAlignment('center');
+  sheet.getRange(FIRST_DATA_ROW, COL.NO_REPLY, MAX_DATA_ROWS, 1).setHorizontalAlignment('center');
 
-  // Force email-related columns to plain text (prevents Sheets from auto-formatting).
+  /**
+   * Timestamp formatting:
+   * - Uses APP_CONFIG.sentAtNumberFormat if present to keep a single source of truth.
+   * - Center alignment reinforces "system-generated / do not edit".
+   */
+  sheet
+    .getRange(FIRST_DATA_ROW, COL.SENT_AT, MAX_DATA_ROWS, 1)
+    .setNumberFormat((APP_CONFIG && APP_CONFIG.sentAtNumberFormat) ? APP_CONFIG.sentAtNumberFormat : 'yyyy/MM/dd - HH:mm:ss')
+    .setHorizontalAlignment('center');
+
+  /**
+   * Force email-like fields to plain text to prevent Sheets auto-formatting.
+   * This avoids issues like stripping leading characters or converting to links unexpectedly.
+   */
+  sheet.getRange(FIRST_DATA_ROW, COL.SUBJECT, MAX_DATA_ROWS, 1).setNumberFormat('@');
   sheet.getRange(FIRST_DATA_ROW, COL.EMAIL, MAX_DATA_ROWS, 1).setNumberFormat('@');
   sheet.getRange(FIRST_DATA_ROW, COL.CC, MAX_DATA_ROWS, 1).setNumberFormat('@');
   sheet.getRange(FIRST_DATA_ROW, COL.BCC, MAX_DATA_ROWS, 1).setNumberFormat('@');
   sheet.getRange(FIRST_DATA_ROW, COL.REPLY_TO, MAX_DATA_ROWS, 1).setNumberFormat('@');
 
-  // Example values (row 12) to demonstrate "real" campaign data format.
-  sheet.getRange('C12').setValue('john.doe@domain.com');
-  sheet.getRange('D12').setValue('john.doe@domain.com');
-  sheet.getRange('H12').setValue('Lorem');
-  sheet.getRange('I12').setValue('Truck');
+  /**
+   * Read-only hinting:
+   * Sent + SentAt are system-maintained columns; shading discourages manual edits.
+   * (If you want hard enforcement, add sheet protections in a dedicated helper.)
+   */
+  const readOnlyGray = '#eeeeee';
+  sheet.getRange(FIRST_DATA_ROW, COL.SENT, MAX_DATA_ROWS, 1).setBackground(readOnlyGray);
+  sheet.getRange(FIRST_DATA_ROW, COL.SENT_AT, MAX_DATA_ROWS, 1).setBackground(readOnlyGray);
 
-  // Freeze rows through the header so instructions + headers remain visible.
   sheet.setFrozenRows(HEADER_ROW);
-
-  // Small alignment cleanup for the top area.
-  sheet.getRange('A2:A7').setHorizontalAlignment('left');
-  sheet.getRange('B2').setHorizontalAlignment('left');
-
   SpreadsheetApp.flush();
 }
