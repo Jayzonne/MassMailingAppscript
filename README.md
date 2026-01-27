@@ -87,7 +87,7 @@ Everything is driven by **column headers**, not column positions.
 
 ### 3️⃣ Prepare your Google Docs template
 
-1. Create a Google Docs file  
+1. Create a **Google Docs** file  
 2. Use placeholders that match **column headers**, for example:
 
 ```text
@@ -96,134 +96,150 @@ Hello $Name$,
 Please visit $Topic1$.
 
 Best regards.
-Copy the document ID from the URL
+```
 
-Paste it into cell B6 (Template ID)
+3. Copy the **document ID** from the URL  
+4. Paste it into cell **B6** (Template ID)
 
-4️⃣ Configure the global subject
-In cell B7, set a global subject
+---
 
-This value is mandatory — sending is blocked if it is empty
+### 4️⃣ Configure the global subject
+
+- In cell **B7**, set a **global subject**
+- This value is **mandatory** — sending is blocked if it is empty
 
 Example:
 
+```text
 Pour me soutenir => une étoile sur mon GitHub
-Each row can override this via the Subject column.
+```
 
-5️⃣ Fill your data rows
-Starting from row 12:
+Each row can override this via the **Subject** column.
 
-Required
+---
 
-To send → checked
+### 5️⃣ Fill your data rows
 
-Email
+Starting from **row 12**:
 
-Subject (or leave empty to use the global subject)
+**Required**
+- **To send** → checked  
+- **Email**  
+- **Subject** (or leave empty to use the global subject)
 
-Optional
+**Optional**
+- **cc**, **bcc**
+- **replyTo**
+- **noReply**
+- Template variables (`Name`, `Topic1`, etc.)
 
-cc, bcc
+---
 
-replyTo
+### 6️⃣ Send a test email (recommended)
 
-noReply
+- Use **row 10** (“Test Email Data”)
+- Menu → **Send email → Test email**
 
-Template variables (Name, Topic1, etc.)
+This sends **only one email**, without touching campaign rows.
 
-6️⃣ Send a test email (recommended)
-Use row 10 (“Test Email Data”)
+---
 
-Menu → Send email → Test email
+### 7️⃣ Send the campaign
 
-This sends only one email, without touching campaign rows.
-
-7️⃣ Send the campaign
-Check To send on desired rows
-
-Menu → Send email → Send selected emails
-
-Confirm
+1. Check **To send** on desired rows  
+2. Menu → **Send email → Send selected emails**  
+3. Confirm  
 
 During sending:
+- Rows are updated **immediately**
+- **Sent** is checked
+- **SentAt** is filled (date + time)
+- Throttling is applied between emails
 
-Rows are updated immediately
+---
 
-Sent is checked
+## 🧩 Column Semantics
 
-SentAt is filled (date + time)
+### Control / Email Columns (blue)
 
-Throttling is applied between emails
+- **To send** — user intent  
+- **Sent** — system status  
+- **SentAt** — system timestamp (read-only)  
+- **Subject** — per-row override  
+- **Email**, **cc**, **bcc**, **replyTo**, **noReply**
 
-🧩 Column Semantics
-Control / Email Columns (blue)
-To send — user intent
+### Template Variables (green)
 
-Sent — system status
+Every **non-reserved header** becomes available in the template as:
 
-SentAt — system timestamp (read-only)
-
-Subject — per-row override
-
-Email, cc, bcc, replyTo, noReply
-
-Template Variables (green)
-Every non-reserved header becomes available in the template as:
-
+```text
 $HeaderName$
+```
+
 Example:
+- Column `Topic1` → `$Topic1$`
 
-Column Topic1 → $Topic1$
+---
 
-🔒 No-Reply Configuration
-If noReply is checked:
+## 🔒 No-Reply Configuration
 
-Email is sent from APP_CONFIG.noReplyFromEmail
+If **noReply** is checked:
+- Email is sent from `APP_CONFIG.noReplyFromEmail`
 
 ⚠️ This address must be configured as an alias in Gmail:
 
+```text
 Gmail → Settings → Accounts → Send mail as
+```
 
-⏱ Throttling & Safety
-Configured in Config.gs:
+---
 
+## ⏱ Throttling & Safety
+
+Configured in `Config.gs`:
+
+```js
 throttling: {
   secondsMin: 10,
   secondsMax: 15,
 }
+```
+
 Why:
+- Avoid Gmail rate limits  
+- Reduce spam-like behavior  
+- Improve reliability on large batches  
 
-Avoid Gmail rate limits
+---
 
-Reduce spam-like behavior
+## 🛠 Maintenance & Customization
 
-Improve reliability on large batches
+- Change layout → `ReconstructTemplate.gs`
+- Change headers → `Config.gs`
+- Add new template fields → just add columns
+- Change throttling → config only
+- Add protections (optional) → Google Sheets protections
 
-🛠 Maintenance & Customization
-Change layout → ReconstructTemplate.gs
+The system is designed so **most changes do not require touching orchestration logic**.
 
-Change headers → Config.gs
+---
 
-Add new template fields → just add columns
+## ⚠️ Important Notes
 
-Change throttling → config only
+- ❌ Email spoofing is **not supported** (by design)
+- ✅ Only verified Gmail aliases can be used
+- ❌ This tool does not bypass Gmail limits
+- ✅ It works *with* Gmail rules, not against them
 
-Add protections (optional) → Google Sheets protections
+---
 
-The system is designed so most changes do not require touching orchestration logic.
+## 📜 License
 
-⚠️ Important Notes
-❌ Email spoofing is not supported (by design)
-
-✅ Only verified Gmail aliases can be used
-
-❌ This tool does not bypass Gmail limits
-
-✅ It works with Gmail rules, not against them
-
-📜 License
 MIT — use freely, modify responsibly.
 
-⭐ Support
-If this project helped you, consider starring the repo ❤️
+---
+
+## ⭐ Support
+
+If this project helped you, consider starring the repo ❤️  
 👉 https://github.com/jayzonne
