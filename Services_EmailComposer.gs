@@ -1,54 +1,51 @@
 /**
  * Services_EmailComposer.gs
  *
- * EmailComposer builds:
- * - Gmail sending parameters (recipient list, subject, Gmail options)
- * - Template variable maps used by the TemplateRenderer
+ * Builds two things from a single sheet row:
+ * - Gmail send arguments (recipient list, subject, Gmail options)
+ * - Template variable map used by the Google Docs mail-merge renderer
  *
- * Responsibilities:
- * - Extract email-related values from a table row using canonical headers
- * - Normalize recipient lists (supports multiple recipients per cell)
- * - Apply "No Reply" behavior when enabled
- * - Ensure reserved email headers are excluded from template variables
+ * Key rules:
+ * - Email parameters must come from "reserved" (blue) headers only (Email, cc, bcc, replyTo, noReply, etc.)
+ * - Template variables are derived from all non-reserved headers (green section + any custom fields)
+ * - Subject resolution: row-level "Subject" overrides the global subject; global is required upstream
  *
- * This class does not send emails and does not render templates.
- * It only prepares structured inputs for those operations.
+ * This service is pure preparation logic: it does not send emails and does not write to the sheet.
  */
 class EmailComposer {
-
   /**
-   * Creates a new EmailComposer.
-   *
    * @param {Object} config
-   *   Application configuration (APP_CONFIG). Used for:
+   *   APP_CONFIG used for:
    *   - reserved header names
-   *   - no-reply sender configuration
+   *   - no-reply sender address
    */
   constructor(config) {
     this.config = config;
   }
 
   /**
-   * Builds Gmail "sendEmail" arguments from a given table row.
+   * Builds the Gmail parameters for a row.
    *
-   * Data source:
-   * - Email configuration is read from reserved (blue) columns only.
-   * - Multiple addresses are supported in Email/cc/bcc/replyTo fields.
+   * Subject resolution:
+   * - If the row contains a "Subject" value, it wins.
+   * - Otherwise, the global subject is used (and is validated by the orchestrator).
    *
-   * Behavior:
-   * - If "No Reply" is enabled, the sender is forced to `config.noReplyFromEmail`
-   *   (must be an allowed Gmail alias).
-   * - Otherwise, replyTo/fromEmail/fromName are applied when provided.
-   * - Per-row subject overrides the default subject if a "subject" column exists.
+   * Address fields (Email / cc / bcc / replyTo):
+   * - Accept multiple recipients in a single cell.
+   * - Normalization supports comma-separated lists and converts ";" to ",".
+   *
+   * noReply behavior:
+   * - When enabled, the sender is forced to config.noReplyFromEmail.
+   * - That address must be configured as an allowed alias in the account ("Send mail as").
    *
    * @param {SheetTable} table
-   *   Parsed sheet table providing header lookup.
+   *   Parsed table with header indexing.
    * @param {{rowNumber:number, values:any[]}} row
-   *   Row object containing raw cell values.
+   *   Source row values.
    * @param {string} defaultSubject
-   *   Fallback subject read from the sheet-level configuration cell.
+   *   Global subject fallback (required by the orchestrator).
    * @returns {{to:string, subject:string, options:Object}}
-   *   Object ready to be passed to GmailApp.sendEmail(to, subject, body, options).
+   *   Arguments suitable for GmailApp.sendEmail(to, subject, body, options).
    */
   buildEmailOptions(table, row, defaultSubject) {
     const idxTo = table.getIndex('email');
@@ -79,14 +76,6 @@ class EmailComposer {
     if (bcc) options.bcc = bcc;
 
     if (noReply) {
-      /**
-       * No-reply behavior:
-       * - Force sender address
-       * - Avoid setting replyTo
-       *
-       * Note: Gmail will only accept this if the address is configured
-       * as an allowed alias ("Send mail as") in the current account.
-       */
       options.from = this.config.noReplyFromEmail;
       options.name = fromName || 'No reply';
     } else {
@@ -99,20 +88,21 @@ class EmailComposer {
   }
 
   /**
-   * Builds the variable map used to render the Google Docs template.
+   * Builds the variable map used for template rendering.
    *
    * Rule:
-   * - Every non-reserved column header becomes a template variable key
-   * - Reserved email/config headers (blue columns) are excluded
-   * - Control columns (toSend/sent/sentAt) are excluded
+   * - Every header that is NOT reserved becomes a template variable key.
+   * - Reserved headers include both:
+   *   - email-parameter headers (Email, cc, bcc, replyTo, noReply, subject, etc.)
+   *   - control/status headers (to send, sent, sentAt)
    *
-   * Example:
-   * - Sheet header "Topic1" => template placeholder "$Topic1$"
+   * Placeholder format expected by TemplateRenderer:
+   * - Sheet header: Topic1
+   * - Google Doc placeholder: $Topic1$ (or $ Topic1 $)
    *
    * @param {SheetTable} table
    * @param {{rowNumber:number, values:any[]}} row
-   * @returns {Object.<string, string>}
-   *   Map of template variables.
+   * @returns {Object.<string,string>}
    */
   buildTemplateVars(table, row) {
     const reserved = new Set(this.config.reservedEmailHeaders.map(Utils.normalize));
@@ -125,7 +115,6 @@ class EmailComposer {
       const key = String(h || '').trim();
       if (!key) return;
 
-      // Exclude reserved/control headers from template variables
       if (reserved.has(Utils.normalize(key))) return;
 
       map[key] = row.values[idx] == null ? '' : String(row.values[idx]);
