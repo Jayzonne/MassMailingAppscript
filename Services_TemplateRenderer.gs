@@ -1,34 +1,22 @@
 /**
  * Services_TemplateRenderer.gs
  *
- * TemplateRenderer is responsible for rendering a Google Docs
- * template into plain text by replacing placeholder variables.
+ * Renders a Google Docs template into plain text by performing a mail-merge:
+ * - Copies the template (so the original is never mutated)
+ * - Replaces placeholders of the form $Variable$ (whitespace tolerant)
+ * - Returns the final body as plain text
  *
- * Responsibilities:
- * - Create a temporary copy of the Google Docs template
- * - Replace all placeholders using the `$Variable$` syntax
- * - Extract the final plain text content
- * - Ensure temporary resources are always cleaned up
+ * Placeholder rules:
+ * - Variable names come from sheet headers (case-sensitive on the sheet side, matched literally here)
+ * - In the Doc, both `$Topic1$` and `$ Topic1 $` are supported
  *
- * This class is intentionally stateless.
+ * Cleanup:
+ * - The temporary copy is always trashed, even if replacement or reading fails
  */
 class TemplateRenderer {
-
   /**
-   * Renders a Google Docs template into plain text.
-   *
-   * The template may contain placeholders using the following syntax:
-   *   - $Topic1$
-   *   - $ Topic1 $
-   *
-   * Placeholders are replaced using the provided variables map.
-   *
-   * Implementation details:
-   * - A temporary copy of the template is created to avoid mutating the original
-   * - The copy is always deleted (trashed) in a finally block
-   *
    * @param {string} templateId
-   *   Google Docs file ID of the template.
+   *   Google Docs file ID used as the mail-merge template.
    * @param {Object.<string, string>} varsMap
    *   Map of variable names to replacement values.
    * @returns {string}
@@ -42,25 +30,25 @@ class TemplateRenderer {
       const doc = DocumentApp.openById(copy.getId());
       const body = doc.getBody();
 
+      /**
+       * We escape variable keys to avoid accidental regex metacharacter interpretation.
+       * The replacement pattern tolerates whitespace inside the $...$ wrapper.
+       */
       Object.keys(varsMap).forEach((key) => {
         const value = varsMap[key] == null ? '' : String(varsMap[key]);
         const escapedKey = Utils.escapeRegex(key);
-
-        // Matches "$Topic1$" and "$ Topic1 $"
         const pattern = `\\$\\s*${escapedKey}\\s*\\$`;
         body.replaceText(pattern, value);
       });
 
       doc.saveAndClose();
 
-      // Reopen to ensure we read the final committed content
-      return DocumentApp
-        .openById(copy.getId())
-        .getBody()
-        .getText();
-
+      /**
+       * Re-opening after save ensures the returned text reflects the committed document state,
+       * which avoids edge cases where a cached DocumentApp instance returns stale content.
+       */
+      return DocumentApp.openById(copy.getId()).getBody().getText();
     } finally {
-      // Always clean up the temporary document to avoid Drive pollution
       copy.setTrashed(true);
     }
   }
