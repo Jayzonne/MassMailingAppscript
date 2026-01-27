@@ -1,35 +1,26 @@
 /**
  * Services_SheetTable.gs
  *
- * SheetTable is a structured in-memory representation of a Google Sheet table.
+ * Represents the campaign table stored in a Google Sheet.
  *
- * Responsibilities:
- * - Read the header row and build a normalized header index
- * - Read all data rows below the header row into a consistent format
- * - Provide safe header lookup (with synonyms) for downstream services
- * - Validate structural constraints (e.g., no duplicate headers)
+ * Why this abstraction exists:
+ * - Apps Script ranges are expensive; reading the table once is faster and more predictable.
+ * - Header names are user-editable, so we normalize and index them for resilient lookups.
+ * - The rest of the codebase should never care about column numbers directly.
  *
- * This class is intentionally focused on "table structure" only.
- * It does not contain business logic such as email sending or templating.
+ * Conventions:
+ * - Header matching is case-insensitive and whitespace-trimmed (via Utils.normalize()).
+ * - The first occurrence of a header wins; duplicate detection is handled separately.
  */
 class SheetTable {
-
   /**
-   * Creates a new SheetTable instance.
-   *
    * @param {Object} params
    * @param {GoogleAppsScript.Spreadsheet.Sheet} params.sheet
-   *   Source sheet used as the table backend.
    * @param {number} params.headerRow
-   *   1-based row index where headers are located.
    * @param {string[]} params.headers
-   *   Raw header values as displayed in the sheet (trimmed).
    * @param {Object.<string, number>} params.headerIndex
-   *   Map of normalized header name -> 0-based column index.
-   * @param {Array<{rowNumber:number, values:any[]}>} params.rows
-   *   Data rows (only rows strictly below the header row).
+   * @param {{rowNumber:number, values:any[]}[]} params.rows
    * @param {number} params.lastCol
-   *   Last column count at read time (used for absolute row reads).
    */
   constructor({ sheet, headerRow, headers, headerIndex, rows, lastCol }) {
     this.sheet = sheet;
@@ -41,11 +32,11 @@ class SheetTable {
   }
 
   /**
-   * Factory method to build a SheetTable from a Google Sheet.
+   * Loads the header row and all data rows into memory.
    *
-   * Reads:
-   * - header row cells across all columns up to `sheet.getLastColumn()`
-   * - every data row below the header row up to `sheet.getLastRow()`
+   * Performance note:
+   * - This method minimizes Range calls (1 for header + 1 for data block).
+   * - Intended to be called once per orchestrator run.
    *
    * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet
    * @param {number} headerRow
@@ -58,12 +49,14 @@ class SheetTable {
     const headerValues = sheet.getRange(headerRow, 1, 1, lastCol).getValues()[0];
     const headers = headerValues.map(h => String(h || '').trim());
 
+    /**
+     * Normalized header → zero-based column index.
+     * First occurrence wins so that duplicates can be reported but do not create ambiguity here.
+     */
     const headerIndex = {};
     headers.forEach((h, i) => {
       const key = Utils.normalize(h);
       if (!key) return;
-
-      // Keep first occurrence; duplicates are detected by validateNoDuplicateHeaders()
       if (headerIndex[key] == null) headerIndex[key] = i;
     });
 
@@ -81,12 +74,14 @@ class SheetTable {
   }
 
   /**
-   * Validates that the table does not contain duplicate headers
-   * (case-insensitive and whitespace-insensitive).
+   * Finds duplicate header labels (case-insensitive).
    *
-   * Duplicate headers create ambiguous behavior and must be blocked.
+   * Why it matters:
+   * - Duplicate headers make the sheet ambiguous and can route data to the wrong field.
+   * - The orchestrator uses this to block sending until the sheet is corrected.
    *
-   * @returns {string[]} List of human-readable validation errors (empty if ok).
+   * @returns {string[]}
+   *   Human-readable problem descriptions.
    */
   validateNoDuplicateHeaders() {
     const seen = new Map();
@@ -96,8 +91,7 @@ class SheetTable {
       if (!key) return;
 
       if (!seen.has(key)) seen.set(key, []);
-      // store 1-based column numbers for user-facing messages
-      seen.get(key).push(i + 1);
+      seen.get(key).push(i + 1); // store 1-based column numbers for user readability
     });
 
     const problems = [];
@@ -106,53 +100,62 @@ class SheetTable {
         problems.push(`Duplicate header "${key}" found in columns: ${cols.join(', ')}`);
       }
     }
-
     return problems;
   }
 
   /**
-   * Returns the 0-based column index for a given header name.
+   * Returns the zero-based column index for a header name (or null if missing).
    *
-   * - Matching is normalized (lowercase + trim)
-   * - Supports common synonyms used in the template:
-   *   - replyTo / reply to / reply_to
-   *   - noReply / no reply / no_reply
-   *   - fromName / from name
-   *   - fromEmail / from email
+   * This method intentionally supports a few common variations so that the system
+   * remains tolerant to minor header spelling differences.
    *
    * @param {string} name
-   *   Header name to look up.
    * @returns {number|null}
-   *   0-based column index, or null if header not found.
    */
   getIndex(name) {
     const key = Utils.normalize(name);
 
-    // Synonyms mapping to support flexible header naming conventions
+    /**
+     * Header normalization supports variations without forcing users to rename columns.
+     * If you add a new canonical header, also consider listing its common variants here.
+     */
     if (key === 'replyto' || key === 'reply to' || key === 'reply_to') {
-      return this.headerIndex['replyto'] ?? this.headerIndex['reply to'] ?? this.headerIndex['reply_to'] ?? null;
+      return this.headerIndex['replyto'] ??
+        this.headerIndex['reply to'] ??
+        this.headerIndex['reply_to'] ??
+        null;
     }
+
     if (key === 'noreply' || key === 'no reply' || key === 'no_reply') {
-      return this.headerIndex['noreply'] ?? this.headerIndex['no reply'] ?? this.headerIndex['no_reply'] ?? null;
+      return this.headerIndex['noreply'] ??
+        this.headerIndex['no reply'] ??
+        this.headerIndex['no_reply'] ??
+        null;
     }
+
     if (key === 'fromname' || key === 'from name') {
-      return this.headerIndex['fromname'] ?? this.headerIndex['from name'] ?? null;
+      return this.headerIndex['fromname'] ??
+        this.headerIndex['from name'] ??
+        null;
     }
+
     if (key === 'fromemail' || key === 'from email') {
-      return this.headerIndex['fromemail'] ?? this.headerIndex['from email'] ?? null;
+      return this.headerIndex['fromemail'] ??
+        this.headerIndex['from email'] ??
+        null;
     }
 
     return this.headerIndex[key] ?? null;
   }
 
   /**
-   * Reads a single absolute row from the sheet across the table width.
+   * Reads a single row by absolute row number.
    *
-   * This is primarily used for the "Test email" workflow where the test row
-   * can live above the header row, and therefore is not part of `this.rows`.
+   * Use case:
+   * - The test row can live outside the data block (e.g., above the header),
+   *   so it cannot be addressed through this.rows.
    *
    * @param {number} rowNumber
-   *   1-based sheet row number to read.
    * @returns {{rowNumber:number, values:any[]}}
    */
   readAbsoluteRow(rowNumber) {
