@@ -1,29 +1,21 @@
 /**
  * Services_MailSender.gs
  *
- * MailSender encapsulates operational concerns during sending:
- * - Marking rows as sent (immediately after a successful send)
- * - Optionally clearing the "To send" checkbox
- * - Optionally writing a "sentAt" timestamp
- * - Applying throttling delays between sends
+ * Applies side effects on the sheet during mail operations:
+ * - Marks rows as sent (checkbox + timestamp)
+ * - Clears the "To send" flag after success (optional)
+ * - Flushes updates so progress is visible while long batches are running
+ * - Throttles between sends to reduce quota / anti-spam / burst behavior issues
  *
- * This class does NOT:
- * - build email options (EmailComposer does that)
- * - render templates (TemplateRenderer does that)
- * - decide which rows to send (Orchestrator does that)
- *
- * It focuses only on side effects and execution pacing.
+ * This service does not send email. It only updates sheet state and pacing.
  */
 class MailSender {
-
   /**
-   * Creates a new MailSender.
-   *
    * @param {Object} params
    * @param {GoogleAppsScript.Spreadsheet.Sheet} params.sheet
-   *   Active sheet used to update row state (Sent / To send / sentAt).
+   *   The sheet where status columns live.
    * @param {Object} params.config
-   *   Application configuration (APP_CONFIG).
+   *   APP_CONFIG (used for header names and behavior toggles).
    */
   constructor({ sheet, config }) {
     this.sheet = sheet;
@@ -31,18 +23,14 @@ class MailSender {
   }
 
   /**
-   * Marks a row as successfully sent and updates related state immediately.
+   * Persists a "successful send" state on a specific row.
    *
-   * Updates performed (depending on config):
-   * - Set "Sent" checkbox to TRUE
-   * - Optionally clear "To send" checkbox
-   * - Optionally write the current timestamp into "sentAt"
-   *
-   * SpreadsheetApp.flush() is called to force UI/state updates promptly.
-   * This is important when long batches are running, so users can observe progress.
+   * Why this is immediate:
+   * - If a batch is long and partially fails, users still get accurate progress feedback.
+   * - If execution stops mid-run (quota/time), already-sent rows remain correctly marked.
    *
    * @param {SheetTable} table
-   *   Parsed sheet table for header index resolution.
+   *   Parsed table used to resolve status column indices.
    * @param {number} rowNumber
    *   Absolute 1-based row number to update.
    */
@@ -59,22 +47,25 @@ class MailSender {
       this.sheet.getRange(rowNumber, idxToSend + 1).setValue(false);
     }
 
+    /**
+     * Timestamp is formatted explicitly to avoid locale-dependent rendering.
+     * The format should match what the template builder applies in reconstruction.
+     */
     if (this.config.marking.writeSentTimestamp && idxSentAt != null) {
-      this.sheet.getRange(rowNumber, idxSentAt + 1).setValue(new Date());
+      const now = new Date();
+      const cell = this.sheet.getRange(rowNumber, idxSentAt + 1);
+      cell.setValue(now);
+      cell.setNumberFormat(this.config.sentAtNumberFormat || 'yyyy/MM/dd - HH:mm:ss');
     }
 
     SpreadsheetApp.flush();
   }
 
   /**
-   * Applies throttling between send attempts.
+   * Adds a random delay between sends.
    *
-   * A random delay is used to:
-   * - reduce Gmail anti-spam triggers
-   * - prevent rate-limit errors
-   * - avoid burst-like traffic patterns
-   *
-   * The delay bounds are defined in config.throttling.
+   * Randomized throttling avoids burst-like traffic patterns and
+   * reduces the probability of rate-limit / anti-spam issues.
    */
   throttle() {
     Utils.sleepRandomSeconds(
